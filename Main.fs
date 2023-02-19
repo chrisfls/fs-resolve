@@ -163,7 +163,7 @@ module rec DepResolver =
       {
         Graph = graph
         Visited = Set.singleton entrypoint
-        Resolved = [ entrypoint ]
+        Resolved = []
         Errors = []
       }
 
@@ -318,3 +318,5 @@ module rec Cli =
   let private em txt = "\x1b[34m" + wrap txt + "\x1b[0m"
 
   let private wrap txt = "'" + txt + "'"
+
+// Cli.main (Array.tail fsi.CommandLineArgs) |> ignore
