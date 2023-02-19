@@ -42,7 +42,8 @@ module rec FileDeps =
 
   let private readItem (line: string) = line.Substring(prefix.Length)
 
-type private Dict<'k, 'v> = System.Collections.Generic.Dictionary<'k, 'v>
+type private Dict<'k, 'v> =
+  System.Collections.Concurrent.ConcurrentDictionary<'k, 'v>
 
 type private DepGraph = Dict<string, Option<seq<string>>>
 
@@ -86,12 +87,12 @@ module rec DepGraph =
           file |> FileDeps.collect |> Seq.map (Path.dirname file |> join state)
 
         let xs' = Some xs
-        state.Graph.Add(file, xs')
+        state.Graph[file] <- xs'
         traverseRelative state file xs
         xs'
 
       with :? System.IO.FileNotFoundException ->
-        ignore <| state.Graph.Remove(file)
+        ignore <| state.Graph.TryRemove(file)
         None
 
   let private join state cwd file =
@@ -220,7 +221,7 @@ module rec Cli =
     let ok =
       args
       |> Seq.ofArray
-      |> Seq.map resolve
+      |> Seq.map (resolve >> Async.AwaitTask)
       |> Async.Parallel
       |> Async.RunSynchronously
       |> Seq.collect report
@@ -229,7 +230,7 @@ module rec Cli =
     if ok then 0 else 1
 
   let private resolve fsproj =
-    async {
+    task {
       let root = Path.dirname fsproj
 
       return
