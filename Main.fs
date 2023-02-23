@@ -24,11 +24,18 @@ module rec FileDeps =
   open System.IO
 
   let collect file =
-    seq { yield! File.ReadLines file }
-    |> Seq.map trim
-    |> Seq.takeWhile shouldTake
-    |> Seq.filter shouldKeep
-    |> Seq.map readItem
+    try
+      let lines =
+        file
+        |> File.ReadLines
+        |> Seq.map trim
+        |> Seq.takeWhile shouldTake
+        |> Seq.filter shouldKeep
+        |> Seq.map readItem
+
+      Some(seq { yield! lines })
+    with :? FileNotFoundException ->
+      None
 
   let private trim (line: string) = line.Trim()
 
@@ -45,7 +52,7 @@ module rec FileDeps =
 type private Dict<'k, 'v> =
   System.Collections.Concurrent.ConcurrentDictionary<'k, 'v>
 
-type private DepGraph = Dict<string, Option<seq<string>>>
+type private DepGraph = Dict<string, Option<seq<Async<string>>>>
 
 module rec DepGraph =
 
@@ -82,16 +89,18 @@ module rec DepGraph =
     if state.Graph.ContainsKey(file) then
       state.Graph[file]
     else
-      try
-        let xs =
-          file |> FileDeps.collect |> Seq.map (Path.dirname file |> join state)
+      let xs =
+        file
+        |> FileDeps.collect
+        |> Option.map (
+          Seq.map (Path.dirname file |> join state) >> traverseRelative state
+        )
 
-        let xs' = Some xs
-        state.Graph[file] <- xs'
-        traverseRelative state file xs
-        xs'
-
-      with :? System.IO.FileNotFoundException ->
+      match xs with
+      | Some _ ->
+        state.Graph[file] <- xs
+        xs
+      | None ->
         ignore <| state.Graph.TryRemove(file)
         None
 
@@ -108,14 +117,14 @@ module rec DepGraph =
       |> Path.relative state.RootFullPath
       |> Path.combine state.Root
 
-  let private traverseRelative state (file: string) xs =
-    xs
-    |> Seq.map (traverse state >> ignore |> toAsync)
-    |> Async.Parallel
-    |> Async.Ignore
-    |> Async.RunSynchronously
+  let private traverseRelative state =
+    Seq.map (traverse state >> ignore |> toAsync)
 
-  let private toAsync f a = async { return f (a) }
+  let private toAsync f a =
+    async {
+      f (a)
+      return a
+    }
 
 type ResolutionError =
   | EntryPointNotFound
@@ -156,7 +165,7 @@ module rec DepResolver =
         Rest =
           graph
           |> DepGraph.get entrypoint
-          |> Option.map Seq.toList
+          |> Option.map (Async.Parallel >> Async.RunSynchronously >> Seq.toList)
           |> Option.defaultValue []
       }
 
@@ -200,7 +209,7 @@ module rec DepResolver =
         {
           Name = name
           Path = Set.add name visit.Path
-          Rest = Seq.toList seq
+          Rest = Async.Parallel seq |> Async.RunSynchronously |> Seq.toList
         }
 
       foldStack (visit' :: visit :: stack) state
@@ -221,7 +230,7 @@ module rec Cli =
     let ok =
       args
       |> Seq.ofArray
-      |> Seq.map (resolve >> Async.AwaitTask)
+      |> Seq.map resolve
       |> Async.Parallel
       |> Async.RunSynchronously
       |> Seq.collect report
@@ -230,7 +239,7 @@ module rec Cli =
     if ok then 0 else 1
 
   let private resolve fsproj =
-    task {
+    async {
       let root = Path.dirname fsproj
 
       return
