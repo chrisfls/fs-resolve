@@ -1,4 +1,8 @@
+.devenv*
+.direnv
+.direnv
+.pre-commit-config.yaml
 bin/
+devenv.local.nix
 obj/
 publish/
-.direnv
